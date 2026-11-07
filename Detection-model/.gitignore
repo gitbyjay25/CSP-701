@@ -1,0 +1,58 @@
+# =====================================================================
+# Git Ignore Configuration - Detection-model
+# =====================================================================
+
+# Nested folders ke node_modules aur dist ke liye double-star
+**/node_modules/
+**/dist/
+
+# Model checkpoints (taaki kisi bhi folder se .pth / .pkl push na ho)
+*.pth
+*.pkl
+*.pt
+*.bin
+*.h5
+*.onnx
+*.safetensors
+*.ckpt
+
+# Python cache & compiled files
+__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# Node / Vite build logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.vite/
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Large archives
+*.zip
+*.tar.gz
+*.rar
+
