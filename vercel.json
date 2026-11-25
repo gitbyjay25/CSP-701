@@ -1,0 +1,6 @@
+{
+    "$schema": "https://openapi.vercel.sh/vercel.json",
+    "framework": "vite",
+    "buildCommand": "cd Detection-model/ai-human-classifier && npm install && npm run build",
+    "outputDirectory": "Detection-model/ai-human-classifier/dist"
+}

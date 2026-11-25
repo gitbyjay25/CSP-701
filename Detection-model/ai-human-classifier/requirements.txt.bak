@@ -1,0 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+fastapi==0.115.0
+uvicorn==0.30.6
+numpy==1.26.4
+pydantic==2.9.0
+gradio
+huggingface_hub<0.26.0

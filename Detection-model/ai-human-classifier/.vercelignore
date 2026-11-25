@@ -1,0 +1,9 @@
+@"
+node_modules
+dist
+.git
+*.pth
+*.pkl
+*.bin
+*.h5
+"@ | Out-File -FilePath .vercelignore -Encoding utf8

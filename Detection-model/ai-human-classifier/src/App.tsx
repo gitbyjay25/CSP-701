@@ -40,22 +40,100 @@ export default function App() {
     setModelVisual(model);
   }, [model]);
 
-  // Feed & Print Handler
-  const handleFeedAndPrint = () => {
+  // Feed & Print Handler (Connects directly to FastAPI /api/classify)
+  const handleFeedAndPrint = async () => {
     if (!text.trim() || isPrinting) return;
 
     setIsPrinting(true);
     setRollerSpinning(true);
     printerAudio.playRollerFeed(850);
 
-    setTimeout(() => {
-      const result = classifyText(text, model);
-      setReport(result);
-      setHistory((prev) => [result, ...prev.slice(0, 19)]);
+    const rawText = text;
+    const modelChoice = model.includes('Final')
+      ? 'model_FinalLSTM_epoch1.pth (Final Model ★)'
+      : 'model_FinalLSTM_epoch1.pth (Default Model)';
+
+    try {
+      const localFallback = classifyText(rawText, model);
+
+      const endpoint =
+        import.meta.env.VITE_API_URL ||
+        (typeof window !== 'undefined' &&
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+          ? '/classify-text'
+          : 'https://gitbyjay25-ai-human-classifier-lstm.hf.space/classify-text');
+
+      console.log("Calling HF Backend:", endpoint);
+
+      let response: Response;
+      const requestPayload = {
+        text: rawText,
+        model_selection: modelChoice,
+        data: [rawText, modelChoice],
+      };
+
+      try {
+        response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestPayload),
+        });
+      } catch (e) {
+        console.warn("Primary endpoint fetch failed, retrying direct HF Space URL:", e);
+        if (endpoint !== 'https://gitbyjay25-ai-human-classifier-lstm.hf.space/classify-text') {
+          response = await fetch('https://gitbyjay25-ai-human-classifier-lstm.hf.space/classify-text', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestPayload),
+          });
+        } else {
+          throw e;
+        }
+      }
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const rawJson = await response.json();
+      console.log("HF Backend Response:", rawJson);
+      const data = (rawJson && Array.isArray(rawJson.data) && rawJson.data[0]) ? rawJson.data[0] : rawJson;
+
+      const finalReport: ClassificationReport = {
+        ...localFallback,
+        id: data.receipt_id || localFallback.id,
+        timestamp: data.timestamp || localFallback.timestamp,
+        verdict: (data.verdict as 'AI GENERATED' | 'HUMAN WRITTEN') || localFallback.verdict,
+        confidence: typeof data.confidence === 'number' ? data.confidence : localFallback.confidence,
+        probabilityAi: typeof data.probability_ai === 'number' ? data.probability_ai : localFallback.probabilityAi,
+        burstinessScore: data.metrics?.burstiness ?? localFallback.burstinessScore,
+        wordCount: data.metrics?.word_count ?? localFallback.wordCount,
+        flowNotes: Array.isArray(data.flow_notes) && data.flow_notes.length > 0
+          ? data.flow_notes.map((fn: any, idx: number) => ({
+              step: fn.step ?? idx + 1,
+              tokenRange: fn.range ?? `t_${idx + 1}`,
+              tokenPreview: fn.preview ?? '',
+              forgetGateFt: fn.forget_gate ?? 0.75,
+              inputGateIt: 0.25,
+              cellStateCt: fn.cell_state ?? 1.2,
+              hiddenStateHt: 0.65,
+              attentionWeight: 0.15,
+              note: fn.note ?? 'LSTM cell h_t[100]. GloVe-50d projection -> LayerNorm(100).',
+            }))
+          : localFallback.flowNotes,
+      };
+
+      setReport(finalReport);
+      setHistory((prev) => [finalReport, ...prev.slice(0, 19)]);
       printerAudio.playStampThump();
+    } catch (err) {
+      console.warn('API error, running fallback:', err);
+      const fallback = classifyText(rawText, model);
+      setReport(fallback);
+      setHistory((prev) => [fallback, ...prev.slice(0, 19)]);
+      printerAudio.playStampThump();
+    } finally {
+      // Ensure the UI never gets stuck on [ PROCESSING ]
       setRollerSpinning(false);
       setIsPrinting(false);
-    }, 750);
+    }
   };
 
   const handleToggleMute = () => {

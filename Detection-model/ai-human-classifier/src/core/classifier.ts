@@ -112,6 +112,15 @@ const AI_MARKERS = [
   'in today\'s fast-paced world',
 ];
 
+// Casual, colloquial, human markers that indicate authentic human authorship
+const CASUAL_HUMAN_MARKERS = [
+  'hey', 'bro', 'dude', 'gonna', 'wanna', 'gotta', 'yeah', 'yep', 'nope',
+  'lol', 'lmao', 'haha', 'tbh', 'imo', 'idk', 'btw', 'honestly', 'basically',
+  'i\'m', 'im', 'i\'ve', 'ive', 'i\'ll', 'ill', 'my', 'me', 'we', 'our', 'stuff', 'cool',
+  'pretty much', 'like', 'anyways', 'anyway', 'guy', 'guys', 'busted', 'sketchy', 'kinda',
+  'sorta', 'nah', 'dunno', 'cuz', 'cause', 'pls', 'please', 'yo', 'oof', 'man', 'bruh'
+];
+
 function generateChecksum(text: string, model: string, ts: number): string {
   let hash = 0x811c9dc5;
   const input = `${text.slice(0, 80)}:${model}:${ts}`;
@@ -162,12 +171,28 @@ export function classifyText(text: string, modelCheckpoint: ModelCheckpoint): Cl
   const charCount = trimmed.length;
   const sentenceCount = Math.max(sentences.length, 1);
 
-  // Burstiness calculation
-  const sentenceLengths = sentences.map(s => (s.match(/\b[a-zA-Z0-9'-]+\b/g) || []).length);
+  // Burstiness calculation (variance of sentence lengths)
+  let burstinessScore = 0.55;
+  if (sentences.length > 1) {
+    const sentenceLengths = sentences.map(s => (s.match(/\b[a-zA-Z0-9'-]+\b/g) || []).length);
+    const avgSentenceLength = wordCount / sentenceCount;
+    const variance = sentenceLengths.reduce((acc, len) => acc + Math.pow(len - avgSentenceLength, 2), 0) / sentenceCount;
+    const stdDev = Math.sqrt(variance);
+    burstinessScore = avgSentenceLength > 0 ? stdDev / Math.max(avgSentenceLength, 1) : 0;
+  } else {
+    // For a single sentence, analyze clause variance across punctuation pauses (, ; - :)
+    const clauses = trimmed.split(/[,;—–:\-]+/).map(c => c.trim()).filter(Boolean);
+    if (clauses.length > 1) {
+      const clauseLengths = clauses.map(c => (c.match(/\b[a-zA-Z0-9'-]+\b/g) || []).length);
+      const avgClauseLen = wordCount / clauses.length;
+      const clauseVar = clauseLengths.reduce((acc, len) => acc + Math.pow(len - avgClauseLen, 2), 0) / clauses.length;
+      burstinessScore = avgClauseLen > 0 ? Math.sqrt(clauseVar) / Math.max(avgClauseLen, 1) : 0.60;
+    } else {
+      // Natural single-sentence neutral human baseline (prevents 0 burstiness false-AI bias)
+      burstinessScore = 0.62;
+    }
+  }
   const avgSentenceLength = wordCount / sentenceCount;
-  const variance = sentenceLengths.reduce((acc, len) => acc + Math.pow(len - avgSentenceLength, 2), 0) / sentenceCount;
-  const stdDev = Math.sqrt(variance);
-  const burstinessScore = avgSentenceLength > 0 ? stdDev / Math.max(avgSentenceLength, 1) : 0;
 
   // Lexical density (TTR)
   const lowerWords = words.map(w => w.toLowerCase());
@@ -182,6 +207,16 @@ export function classifyText(text: string, modelCheckpoint: ModelCheckpoint): Cl
       if (lowerText.includes(marker)) foundAiMarkers.push(marker);
     } else {
       if (lowerWords.includes(marker)) foundAiMarkers.push(marker);
+    }
+  }
+
+  // Casual Human Markers detection
+  let casualCount = 0;
+  for (const marker of CASUAL_HUMAN_MARKERS) {
+    if (marker.includes(' ')) {
+      if (lowerText.includes(marker)) casualCount++;
+    } else {
+      if (lowerWords.includes(marker)) casualCount++;
     }
   }
 
@@ -204,35 +239,56 @@ export function classifyText(text: string, modelCheckpoint: ModelCheckpoint): Cl
   if (sentencePerplexities.length === 0) sentencePerplexities = [45];
 
   const avgPerplexity = sentencePerplexities.reduce((a, b) => a + b, 0) / sentencePerplexities.length;
-  const perpVariance = sentencePerplexities.reduce((acc, val) => acc + Math.pow(val - avgPerplexity, 2), 0) / sentencePerplexities.length;
+  const perpVariance = sentences.length > 1
+    ? sentencePerplexities.reduce((acc, val) => acc + Math.pow(val - avgPerplexity, 2), 0) / sentencePerplexities.length
+    : 25.0; // Neutral variance baseline for single sentence
 
   // GloVe-50d embedding metrics
   const gloveCoverage = Math.min(99.6, 92.5 + (ttrScore * 8));
   const gloveEmbeddingNorm = 3.85 + (avgSentenceLength * 0.04);
 
-  // Model Probability Calculation using the real LSTM logic
+  // Model Probability Calculation calibrated to avoid false AI positives on casual single sentences
   let aiScore = 0.50;
 
-  // 1. Burstiness
-  if (burstinessScore < 0.28) {
-    aiScore += 0.24;
-  } else if (burstinessScore < 0.45) {
-    aiScore += 0.12;
-  } else if (burstinessScore > 0.70) {
-    aiScore -= 0.26;
-  } else if (burstinessScore > 0.55) {
-    aiScore -= 0.14;
+  // 1. Burstiness (only penalize low burstiness if multiple sentences exist)
+  if (sentences.length > 1) {
+    if (burstinessScore < 0.28) {
+      aiScore += 0.24;
+    } else if (burstinessScore < 0.45) {
+      aiScore += 0.12;
+    } else if (burstinessScore > 0.70) {
+      aiScore -= 0.26;
+    } else if (burstinessScore > 0.55) {
+      aiScore -= 0.14;
+    }
+  } else {
+    // Single sentence: high burstiness / clause variety indicates human writing
+    if (burstinessScore > 0.55) {
+      aiScore -= 0.18;
+    }
   }
 
-  // 2. Perplexity Variance
-  if (perpVariance < 12.0) {
-    aiScore += 0.16;
-  } else if (perpVariance > 45.0) {
-    aiScore -= 0.18;
+  // 2. Perplexity Variance (only applicable if multiple sentences exist)
+  if (sentences.length > 1) {
+    if (perpVariance < 12.0) {
+      aiScore += 0.16;
+    } else if (perpVariance > 45.0) {
+      aiScore -= 0.18;
+    }
   }
 
-  // 3. Markers
-  aiScore += Math.min(foundAiMarkers.length * 0.08, 0.32);
+  // 3. AI Markers
+  aiScore += Math.min(foundAiMarkers.length * 0.10, 0.35);
+
+  // 4. Casual human marker adjustment
+  if (casualCount > 0) {
+    aiScore -= Math.min(casualCount * 0.16, 0.42);
+  }
+
+  // Single-sentence protection: if no AI markers are present, default to human
+  if (sentences.length <= 1 && foundAiMarkers.length === 0) {
+    aiScore = Math.min(aiScore, casualCount > 0 ? 0.12 : 0.28);
+  }
 
   // Mode difference
   if (modelCheckpoint === 'model_FinalLSTM_epoch1.pth (Final)') {
